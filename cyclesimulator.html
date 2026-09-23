@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thermodynamic Cycle Simulator</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the applet */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8; /* Light blue-gray background */
+            color: #333; /* Dark gray text */
+        }
+        canvas {
+            border: 1px solid #cbd5e0; /* Light gray border */
+            background-color: #ffffff; /* White canvas background */
+            border-radius: 0.5rem; /* Rounded corners */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow */
+        }
+        /* Style for draggable points on the canvas */
+        .draggable-point {
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            background-color: #3b82f6; /* Blue-500 */
+            border: 2px solid #1e40af; /* Blue-800 */
+            border-radius: 50%; /* Circular shape */
+            cursor: grab; /* Cursor indicates draggable */
+            transform: translate(-50%, -50%); /* Center the circle on the cursor */
+            z-index: 10; /* Ensure points are above lines */
+        }
+        /* Style for active (being dragged) point */
+        .draggable-point.active {
+            background-color: #ef4444; /* Red-500 when active */
+            border-color: #b91c1c; /* Red-800 */
+            cursor: grabbing; /* Cursor indicates dragging */
+        }
+        .control-point {
+            background-color: #f59e0b; /* Amber-500 for control points */
+            border-color: #d97706; /* Amber-700 */
+            width: 12px;
+            height: 12px;
+        }
+        .input-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        .input-group label {
+            width: 60px; /* Fixed width for labels */
+            font-size: 0.875rem; /* text-sm */
+            color: #475569; /* slate-600 */
+        }
+        .input-group input {
+            flex-grow: 1;
+            padding: 0.25rem 0.5rem;
+            border: 1px solid #cbd5e0;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+            margin-left: 0.5rem;
+            max-width: 100px; /* Limit input width */
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 flex flex-col items-center min-h-screen">
+
+    <h1 class="text-3xl md:text-4xl font-bold text-center mb-6 text-gray-800">Thermodynamic Cycle Simulator</h1>
+
+    <div class="flex flex-col lg:flex-row gap-6 w-full max-w-6xl">
+        <div class="lg:w-2/3 bg-white p-6 rounded-lg shadow-lg flex flex-col items-center">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Pressure-Volume Diagram</h2>
+            <!-- Canvas container for responsive aspect ratio -->
+            <div class="relative w-full" style="padding-bottom: 75%; height: 0;">
+                <canvas id="pvCanvas" class="absolute top-0 left-0 w-full h-full"></canvas>
+            </div>
+            <button id="resetButton" class="mt-6 px-6 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition duration-300">
+                Reset Cycle
+            </button>
+            <div id="tempWarning" class="mt-4 text-red-600 font-semibold text-center hidden">
+                Warning: Temperature out of 200-1000 K range!
+            </div>
+        </div>
+
+        <div class="lg:w-1/3 bg-white p-6 rounded-lg shadow-lg">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Cycle Properties</h2>
+            <div id="cycleResults" class="text-sm space-y-1">
+                <p><strong>Net Work Done (W_net):</strong> <span id="netWork">0.00</span> J</p>
+                <p><strong>Total Heat In (Q_in):</strong> <span id="heatIn">0.00</span> J</p>
+                <p><strong>Efficiency (&eta;):</strong> <span id="efficiency">0.00</span> %</p>
+                <p><strong>Max Temperature (T_H):</strong> <span id="maxTemp">0.00</span> K</p>
+                <p><strong>Min Temperature (T_C):</strong> <span id="minTemp">0.00</span> K</p>
+                <p><strong>Carnot Efficiency (&eta;_Carnot):</strong> <span id="carnotEfficiency">0.00</span> %</p>
+            </div>
+
+            <h2 class="text-xl font-semibold mt-6 mb-4 text-gray-700">Leg Details</h2>
+            <div id="legDetails" class="space-y-2 text-sm">
+                <!-- Leg details will be populated here by JavaScript -->
+            </div>
+
+            <h2 class="text-xl font-semibold mt-6 mb-4 text-gray-700">Manual Point Input</h2>
+            <div id="manualInput" class="space-y-4 text-sm">
+                <!-- Manual input fields will be populated here by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Get references to HTML elements
+        const canvas = document.getElementById('pvCanvas');
+        const ctx = canvas.getContext('2d');
+        const resetButton = document.getElementById('resetButton');
+        const netWorkSpan = document.getElementById('netWork');
+        const heatInSpan = document.getElementById('heatIn');
+        const efficiencySpan = document.getElementById('efficiency');
+        const maxTempSpan = document.getElementById('maxTemp');
+        const minTempSpan = document.getElementById('minTemp');
+        const carnotEfficiencySpan = document.getElementById('carnotEfficiency');
+        const legDetailsDiv = document.getElementById('legDetails');
+        const tempWarningDiv = document.getElementById('tempWarning');
+        const manualInputDiv = document.getElementById('manualInput');
+
+        // Physical Constants
+        const R = 8.314; // J/(mol·K) - Ideal gas constant
+        const n = 1.0;   // moles of gas (adjusted to 1.0 mol for better temperature range with default points)
+        const gamma = 5/3; // Cp/Cv for a monatomic ideal gas (e.g., Helium, Argon)
+        const Cv = R / (gamma - 1); // J/(mol·K) - Molar heat capacity at constant volume
+        const Cp = gamma * Cv; // J/(mol·K) - Molar heat capacity at constant pressure
+
+        // Canvas drawing parameters
+        let canvasWidth, canvasHeight;
+        const padding = 50; // Padding from canvas edges for axes and labels
+        let scaleX, scaleY; // Pixels per unit of Volume (m³) and Pressure (Pa)
+        let originX, originY; // Canvas coordinates for the (0,0) point on the P-V plane
+
+        // Default P and V ranges for the graph display (can auto-adjust based on points)
+        const P_MIN_VIEW = 0; // Minimum pressure shown on axis (Pa)
+        const V_MIN_VIEW = 0; // Minimum volume shown on axis (m^3)
+        // Initial max view values, will dynamically adjust based on points
+        let P_MAX_VIEW = 4000; // Initial guess for max pressure view (Pa)
+        let V_MAX_VIEW = 4.0;   // Initial guess for max volume view (m^3)
+
+        // Temperature limits
+        const TEMP_MIN_LIMIT = 200; // K
+        const TEMP_MAX_LIMIT = 1000; // K
+
+        // Cycle vertices (P in Pascals, V in cubic meters)
+        let vertices = [];
+        // Control points for quadratic Bezier curves. controlPoints[i] is for the segment from vertices[i] to vertices[(i+1)%numVertices]
+        let controlPoints = [];
+
+        // Initial points for a default CLOCKWISE cycle for positive net work, within 200-1000K for n=1.0 mol
+        const defaultVertices = [
+            { P: 3500, V: 1.5 }, // Vertex 0 (T ~ 631 K)
+            { P: 3500, V: 2.0 }, // Vertex 1 (T ~ 842 K)
+            { P: 1150, V: 2.0 }, // Vertex 2 (T ~ 276 K)
+            { P: 1150, V: 1.5 }  // Vertex 3 (T ~ 207 K)
+        ];
+
+        // Control points for the default cycle, ensuring they also stay within temperature limits
+        const defaultControlPoints = [
+            { P: 3600, V: 1.75 }, // Control for 0->1 (slightly above isobaric) T ~ 758K
+            { P: 2325, V: 2.1 },  // Control for 1->2 (slightly right of isochoric) T ~ 588K
+            { P: 1050, V: 1.75 }, // Control for 2->3 (slightly below isobaric) T ~ 221K
+            { P: 2325, V: 1.4 }   // Control for 3->0 (slightly left of isochoric) T ~ 391K
+        ];
+
+        let draggingPointIndex = -1; // Index of the point currently being dragged
+        let draggingType = null; // 'vertex' or 'control'
+        let mouseX, mouseY; // Current mouse coordinates
+
+        /**
+         * Converts physical (P, V) coordinates to canvas (x, y) coordinates.
+         * @param {number} P Pressure in Pascals.
+         * @param {number} V Volume in cubic meters.
+         * @returns {{x: number, y: number}} Canvas coordinates.
+         */
+        function toCanvasCoords(P, V) {
+            const x = originX + V * scaleX;
+            const y = originY - P * scaleY; // Y-axis is inverted in canvas (0 at top)
+            return { x, y };
+        }
+
+        /**
+         * Converts canvas (x, y) coordinates back to physical (P, V) coordinates.
+         * @param {number} x Canvas X coordinate.
+         * @param {number} y Canvas Y coordinate.
+         * @returns {{P: number, V: number}} Physical Pressure and Volume.
+         */
+        function toPhysicalCoords(x, y) {
+            const V = (x - originX) / scaleX;
+            const P = (originY - y) / scaleY;
+            return { P, V };
+        }
+
+        /**
+         * Calculates the temperature of an ideal gas at a given (P, V) state.
+         * @param {number} P Pressure in Pascals.
+         * @param {number} V Volume in cubic meters.
+         * @returns {number} Temperature in Kelvin.
+         */
+        function calculateTemperature(P, V) {
+            // Ideal gas law: PV = nRT => T = PV / (nR)
+            return (P * V) / (n * R);
+        }
+
+        /**
+         * Calculates the work done by the gas for a quadratic Bezier curve segment.
+         * This requires numerical integration (e.g., trapezoidal rule over many small steps).
+         * @param {object} p1 Start point {P, V}.
+         * @param {object} cp Control point {P, V}.
+         * @param {object} p2 End point {P, V}.
+         * @param {number} numSteps Number of integration steps.
+         * @returns {number} Work done in Joules.
+         */
+        function calculateWorkBezier(p1, cp, p2, numSteps = 100) {
+            let work = 0;
+            let prevP, prevV;
+
+            for (let i = 0; i <= numSteps; i++) {
+                const t = i / numSteps;
+                // Bézier curve formula: B(t) = (1-t)^2 * P1 + 2(1-t)t * CP + t^2 * P2
+                const currentP = Math.pow(1 - t, 2) * p1.P + 2 * (1 - t) * t * cp.P + Math.pow(t, 2) * p2.P;
+                const currentV = Math.pow(1 - t, 2) * p1.V + 2 * (1 - t) * t * cp.V + Math.pow(t, 2) * p2.V;
+
+                if (i > 0) {
+                    // Trapezoidal rule for work: W = (P_avg) * dV
+                    work += 0.5 * (prevP + currentP) * (currentV - prevV);
+                }
+                prevP = currentP;
+                prevV = currentV;
+            }
+            return work;
+        }
+
+        /**
+         * Calculates the change in internal energy for an ideal gas.
+         * @param {number} T1 Initial Temperature.
+         * @param {number} T2 Final Temperature.
+         * @returns {number} Change in internal energy in Joules.
+         */
+        function calculateDeltaU(T1, T2) {
+            return n * Cv * (T2 - T1);
+        }
+
+        /**
+         * Calculates the heat transfer for a process using the First Law of Thermodynamics.
+         * @param {number} deltaU Change in internal energy.
+         * @param {number} work Work done by the gas.
+         * @returns {number} Heat transfer in Joules.
+         */
+        function calculateHeat(deltaU, work) {
+            // First Law of Thermodynamics: Q = dU + W
+            return deltaU + work;
+        }
+
+        /**
+         * Main function to draw the cycle, perform calculations, and update the UI.
+         */
+        function drawCycle() {
+            canvasWidth = canvas.width;
+            canvasHeight = canvas.height;
+
+            // Clear the canvas
+            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+            // Dynamically adjust P_MAX_VIEW and V_MAX_VIEW based on current points
+            let allPoints = [...vertices, ...controlPoints];
+            let currentMaxP = 0;
+            let currentMaxV = 0;
+            if (allPoints.length > 0) {
+                currentMaxP = Math.max(...allPoints.map(p => p.P));
+                currentMaxV = Math.max(...allPoints.map(p => p.V));
+            }
+            // Ensure P_MAX_VIEW and V_MAX_VIEW are large enough to contain current points with buffer
+            // Also ensure they are at least the initial default view values
+            P_MAX_VIEW = Math.max(currentMaxP * 1.2, 4000); // At least 4kPa, with 20% buffer
+            V_MAX_VIEW = Math.max(currentMaxV * 1.2, 4.0);   // At least 4m^3, with 20% buffer
+
+            // Recalculate scales and origin based on updated view range
+            scaleX = (canvasWidth - 2 * padding) / (V_MAX_VIEW - V_MIN_VIEW);
+            scaleY = (canvasHeight - 2 * padding) / (P_MAX_VIEW - P_MIN_VIEW);
+            originX = padding - V_MIN_VIEW * scaleX;
+            originY = canvasHeight - padding + P_MIN_VIEW * scaleY;
+
+            // Draw axes
+            ctx.beginPath();
+            ctx.strokeStyle = '#64748b'; // Slate-500
+            ctx.lineWidth = 2;
+            ctx.moveTo(originX, padding); // Y-axis (Pressure)
+            ctx.lineTo(originX, originY);
+            ctx.lineTo(canvasWidth - padding, originY); // X-axis (Volume)
+            ctx.stroke();
+
+            // Draw axis labels
+            ctx.fillStyle = '#333';
+            ctx.font = '14px Inter';
+            ctx.textAlign = 'center';
+            ctx.fillText('Volume (m³)', canvasWidth / 2, canvasHeight - 15);
+            ctx.save(); // Save canvas state before rotating
+            ctx.translate(15, canvasHeight / 2); // Move origin for text
+            ctx.rotate(-Math.PI / 2); // Rotate text
+            ctx.fillText('Pressure (Pa)', 0, 0);
+            ctx.restore(); // Restore canvas state
+
+            // Draw grid lines and axis ticks
+            ctx.strokeStyle = '#e2e8f0'; // Gray-200
+            ctx.lineWidth = 1;
+            ctx.font = '12px Inter';
+            ctx.fillStyle = '#64748b';
+
+            // X-axis ticks (Volume)
+            const numXTicks = 5;
+            for (let i = 0; i <= numXTicks; i++) {
+                const V_val = V_MIN_VIEW + (i / numXTicks) * (V_MAX_VIEW - V_MIN_VIEW);
+                const { x } = toCanvasCoords(0, V_val);
+                ctx.beginPath();
+                ctx.moveTo(x, originY);
+                ctx.lineTo(x, padding); // Extend grid to top
+                ctx.stroke();
+                // Display volume with 2 decimal places for axis ticks
+                ctx.fillText(V_val.toFixed(2), x, originY + 15);
+            }
+
+            // Y-axis ticks (Pressure)
+            const numYTicks = 5;
+            for (let i = 0; i <= numYTicks; i++) {
+                const P_val = P_MIN_VIEW + (i / numYTicks) * (P_MAX_VIEW - P_MIN_VIEW);
+                const { y } = toCanvasCoords(P_val, 0);
+                ctx.beginPath();
+                ctx.moveTo(originX, y);
+                ctx.lineTo(canvasWidth - padding, y); // Extend grid to right
+                ctx.stroke();
+                ctx.textAlign = 'right';
+                // Display pressure in kiloPascals (kPa) with 1 decimal place for axis ticks
+                ctx.fillText((P_val / 1000).toFixed(1) + 'k', originX - 5, y + 5);
+            }
+            ctx.textAlign = 'center'; // Reset for other text
+
+            // Draw cycle path
+            ctx.beginPath();
+            ctx.strokeStyle = '#3b82f6'; // Blue-500
+            ctx.lineWidth = 3;
+            if (vertices.length > 0) {
+                const start = toCanvasCoords(vertices[0].P, vertices[0].V);
+                ctx.moveTo(start.x, start.y);
+                for (let i = 0; i < vertices.length; i++) {
+                    const p1 = vertices[i];
+                    const p2 = vertices[(i + 1) % vertices.length];
+                    const cp = controlPoints[i];
+                    const cpCanvas = toCanvasCoords(cp.P, cp.V);
+                    const p2Canvas = toCanvasCoords(p2.P, p2.V);
+                    ctx.quadraticCurveTo(cpCanvas.x, cpCanvas.y, p2Canvas.x, p2Canvas.y);
+                }
+                ctx.stroke();
+            }
+
+            // Calculate cycle properties and draw draggable points
+            let totalWork = 0;
+            let totalHeatIn = 0; // Sum of Q for legs where Q > 0
+            let maxTemp = 0;
+            let minTemp = Infinity;
+            let legDetailsHTML = '';
+            let tempWarningActive = false;
+
+            const numVertices = vertices.length;
+            for (let i = 0; i < numVertices; i++) {
+                const p1 = vertices[i];
+                const p2 = vertices[(i + 1) % numVertices]; // Next vertex, wraps around for the last leg
+                const cp = controlPoints[i];
+
+                // Calculate temperatures for vertices and control points
+                const T1 = calculateTemperature(p1.P, p1.V);
+                const T2 = calculateTemperature(p2.P, p2.V);
+                const T_cp = calculateTemperature(cp.P, cp.V);
+
+                // Check temperature limits for all points on the curve (vertices and control points)
+                if (T1 < TEMP_MIN_LIMIT || T1 > TEMP_MAX_LIMIT ||
+                    T2 < TEMP_MIN_LIMIT || T2 > TEMP_MAX_LIMIT ||
+                    T_cp < TEMP_MIN_LIMIT || T_cp > TEMP_MAX_LIMIT) {
+                    tempWarningActive = true;
+                }
+
+                // Update min/max temperatures for Carnot efficiency calculation
+                maxTemp = Math.max(maxTemp, T1, T2, T_cp);
+                minTemp = Math.min(minTemp, T1, T2, T_cp);
+
+                // Calculate work, internal energy change, and heat for the current leg
+                const workLeg = calculateWorkBezier(p1, cp, p2);
+                const deltaULeg = calculateDeltaU(T1, T2); // Delta U only depends on start and end temperatures
+                const heatLeg = calculateHeat(deltaULeg, workLeg);
+
+                totalWork += workLeg; // Sum up work for net work
+                if (heatLeg > 0) {
+                    totalHeatIn += heatLeg; // Sum up only positive heat for Q_in
+                }
+
+                // Populate HTML for leg details
+                legDetailsHTML += `
+                    <div class="p-2 border border-gray-200 rounded-md bg-gray-50">
+                        <p><strong>Leg ${i + 1} &rarr; ${((i + 1) % numVertices) + 1}:</strong></p>
+                        <p class="ml-4">Work (W): ${workLeg.toFixed(2)} J</p>
+                        <p class="ml-4">Heat (Q): ${heatLeg.toFixed(2)} J</p>
+                        <p class="ml-4">Start Temp (T): ${T1.toFixed(2)} K</p>
+                        <p class="ml-4">End Temp (T): ${T2.toFixed(2)} K</p>
+                    </div>
+                `;
+
+                // Draw control points (dashed lines to their associated vertices)
+                const p1Canvas = toCanvasCoords(p1.P, p1.V);
+                const cpCanvas = toCanvasCoords(cp.P, cp.V);
+                const p2Canvas = toCanvasCoords(p2.P, p2.V);
+
+                ctx.strokeStyle = '#d97706'; // Amber-700 for control lines
+                ctx.setLineDash([4, 2]); // Dashed line
+                ctx.beginPath();
+                ctx.moveTo(p1Canvas.x, p1Canvas.y);
+                ctx.lineTo(cpCanvas.x, cpCanvas.y);
+                ctx.lineTo(p2Canvas.x, p2Canvas.y);
+                ctx.stroke();
+                ctx.setLineDash([]); // Reset to solid line
+
+                // Draw control point circle
+                ctx.beginPath();
+                ctx.arc(cpCanvas.x, cpCanvas.y, 6, 0, 2 * Math.PI); // Smaller circle for control point
+                ctx.fillStyle = (i === draggingPointIndex && draggingType === 'control') ? '#ef4444' : '#f59e0b'; // Red if dragging, else amber
+                ctx.strokeStyle = (i === draggingPointIndex && draggingType === 'control') ? '#b91c1c' : '#d97706';
+                ctx.lineWidth = 2;
+                ctx.fill();
+                ctx.stroke();
+
+                // Display P, V, T values next to control point with 3 significant figures
+                ctx.fillStyle = '#333';
+                ctx.font = '9px Inter';
+                ctx.textAlign = 'left';
+                ctx.fillText(`P: ${(cp.P / 1000).toPrecision(3)}kPa`, cpCanvas.x + 8, cpCanvas.y - 4);
+                ctx.fillText(`V: ${cp.V.toPrecision(3)}m³`, cpCanvas.x + 8, cpCanvas.y + 4);
+                ctx.fillText(`T: ${T_cp.toFixed(0)}K`, cpCanvas.x + 8, cpCanvas.y + 12);
+            }
+
+            // Draw vertex points (on top of everything else)
+            for (let i = 0; i < numVertices; i++) {
+                const p = vertices[i];
+                const { x, y } = toCanvasCoords(p.P, p.V);
+                const T_vertex = calculateTemperature(p.P, p.V);
+
+                ctx.beginPath();
+                ctx.arc(x, y, 8, 0, 2 * Math.PI); // Draw a circle for the vertex
+                ctx.fillStyle = (i === draggingPointIndex && draggingType === 'vertex') ? '#ef4444' : '#3b82f6'; // Red if dragging, else blue
+                ctx.strokeStyle = (i === draggingPointIndex && draggingType === 'vertex') ? '#b91c1c' : '#1e40af';
+                ctx.lineWidth = 2;
+                ctx.fill();
+                ctx.stroke();
+
+                // Display P, V, T values next to each vertex point with 3 significant figures
+                ctx.fillStyle = '#333';
+                ctx.font = '10px Inter';
+                ctx.textAlign = 'left';
+                ctx.fillText(`P: ${(p.P / 1000).toPrecision(3)}kPa`, x + 10, y - 5);
+                ctx.fillText(`V: ${p.V.toPrecision(3)}m³`, x + 10, y + 5);
+                ctx.fillText(`T: ${T_vertex.toFixed(0)}K`, x + 10, y + 15);
+            }
+
+
+            legDetailsDiv.innerHTML = legDetailsHTML; // Update leg details in UI
+
+            // Show/hide temperature warning
+            if (tempWarningActive) {
+                tempWarningDiv.classList.remove('hidden');
+            } else {
+                tempWarningDiv.classList.add('hidden');
+            }
+
+            // Calculate overall cycle efficiency
+            let efficiency = 0;
+            if (totalHeatIn > 0) {
+                efficiency = (totalWork / totalHeatIn) * 100;
+            } else if (totalWork > 0 && totalHeatIn === 0) {
+                // Theoretical case: if work is done but no heat is put in (e.g., ideal adiabatic cycle)
+                efficiency = 100; // This is a simplification for visualization
+            }
+
+            // Calculate Carnot efficiency
+            let carnotEfficiency = 0;
+            if (minTemp > 0 && maxTemp > minTemp) {
+                carnotEfficiency = (1 - (minTemp / maxTemp)) * 100;
+            }
+
+            // Update main cycle property display in UI
+            netWorkSpan.textContent = totalWork.toFixed(2);
+            heatInSpan.textContent = totalHeatIn.toFixed(2);
+            efficiencySpan.textContent = efficiency.toFixed(2);
+            maxTempSpan.textContent = maxTemp.toFixed(2);
+            minTempSpan.textContent = minTemp.toFixed(2);
+            carnotEfficiencySpan.textContent = carnotEfficiency.toFixed(2);
+
+            // Update manual input fields
+            populateInputFields();
+        }
+
+        /**
+         * Populates the manual input fields with current point data.
+         */
+        function populateInputFields() {
+            manualInputDiv.innerHTML = ''; // Clear previous inputs
+
+            vertices.forEach((p, i) => {
+                const vertexDiv = document.createElement('div');
+                vertexDiv.className = 'border border-blue-200 rounded-md p-2 mb-2 bg-blue-50';
+                vertexDiv.innerHTML = `<h3 class="font-semibold text-blue-800 mb-2">Vertex ${i + 1}</h3>`;
+
+                // Pressure input
+                const pInputGroup = document.createElement('div');
+                pInputGroup.className = 'input-group';
+                pInputGroup.innerHTML = `<label for="v${i}P">Pressure (Pa):</label><input type="number" id="v${i}P" value="${(p.P).toPrecision(3)}" step="any">`;
+                const pInput = pInputGroup.querySelector('input');
+                pInput.onchange = (e) => updatePointFromInput(e, 'vertex', i, 'P');
+                vertexDiv.appendChild(pInputGroup);
+
+                // Volume input
+                const vInputGroup = document.createElement('div');
+                vInputGroup.className = 'input-group';
+                vInputGroup.innerHTML = `<label for="v${i}V">Volume (m³):</label><input type="number" id="v${i}V" value="${(p.V).toPrecision(3)}" step="any">`;
+                const vInput = vInputGroup.querySelector('input');
+                vInput.onchange = (e) => updatePointFromInput(e, 'vertex', i, 'V');
+                vertexDiv.appendChild(vInputGroup);
+
+                manualInputDiv.appendChild(vertexDiv);
+            });
+
+            controlPoints.forEach((p, i) => {
+                const controlDiv = document.createElement('div');
+                controlDiv.className = 'border border-amber-200 rounded-md p-2 mb-2 bg-amber-50';
+                controlDiv.innerHTML = `<h3 class="font-semibold text-amber-800 mb-2">Control Point ${i + 1}</h3>`;
+
+                // Pressure input
+                const pInputGroup = document.createElement('div');
+                pInputGroup.className = 'input-group';
+                pInputGroup.innerHTML = `<label for="c${i}P">Pressure (Pa):</label><input type="number" id="c${i}P" value="${(p.P).toPrecision(3)}" step="any">`;
+                const pInput = pInputGroup.querySelector('input');
+                pInput.onchange = (e) => updatePointFromInput(e, 'control', i, 'P');
+                controlDiv.appendChild(pInputGroup);
+
+                // Volume input
+                const vInputGroup = document.createElement('div');
+                vInputGroup.className = 'input-group';
+                vInputGroup.innerHTML = `<label for="c${i}V">Volume (m³):</label><input type="number" id="c${i}V" value="${(p.V).toPrecision(3)}" step="any">`;
+                const vInput = vInputGroup.querySelector('input');
+                vInput.onchange = (e) => updatePointFromInput(e, 'control', i, 'V');
+                controlDiv.appendChild(vInputGroup);
+
+                manualInputDiv.appendChild(controlDiv);
+            });
+        }
+
+        /**
+         * Updates a point's P or V based on manual input.
+         * @param {Event} e The change event from the input field.
+         * @param {string} type 'vertex' or 'control'.
+         * @param {number} index Index of the point.
+         * @param {string} prop 'P' or 'V'.
+         */
+        function updatePointFromInput(e, type, index, prop) {
+            let value = parseFloat(e.target.value);
+
+            if (isNaN(value)) {
+                // If input is not a number, revert to previous valid value
+                if (type === 'vertex') {
+                    e.target.value = vertices[index][prop].toPrecision(3);
+                } else {
+                    e.target.value = controlPoints[index][prop].toPrecision(3);
+                }
+                return;
+            }
+
+            // Apply clamping
+            if (prop === 'P') {
+                value = Math.max(100, value); // Min pressure 100 Pa
+            } else { // prop === 'V'
+                value = Math.max(0.01, value); // Min volume 0.01 m^3
+            }
+
+            if (type === 'vertex') {
+                vertices[index][prop] = value;
+            } else {
+                controlPoints[index][prop] = value;
+            }
+
+            drawCycle(); // Redraw with updated point
+        }
+
+
+        // --- Event Listeners for User Interaction ---
+
+        // Mouse down event: Start dragging a point if clicked near one
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+
+            // Check for control points first (smaller, so harder to hit)
+            for (let i = 0; i < controlPoints.length; i++) {
+                const { x, y } = toCanvasCoords(controlPoints[i].P, controlPoints[i].V);
+                const distance = Math.sqrt(Math.pow(mouseX - x, 2) + Math.pow(mouseY - y, 2));
+                if (distance < 8) { // Check if click is within 8 pixels radius of a control point
+                    draggingPointIndex = i;
+                    draggingType = 'control';
+                    canvas.classList.add('active');
+                    return; // Exit after finding a draggable point
+                }
+            }
+
+            // Then check for vertices
+            for (let i = 0; i < vertices.length; i++) {
+                const { x, y } = toCanvasCoords(vertices[i].P, vertices[i].V);
+                const distance = Math.sqrt(Math.pow(mouseX - x, 2) + Math.pow(mouseY - y, 2));
+                if (distance < 10) { // Check if click is within 10 pixels radius of a vertex
+                    draggingPointIndex = i;
+                    draggingType = 'vertex';
+                    canvas.classList.add('active');
+                    return; // Exit after finding a draggable point
+                }
+            }
+        });
+
+        // Mouse move event: Update point position if dragging
+        canvas.addEventListener('mousemove', (e) => {
+            if (draggingPointIndex !== -1 && draggingType !== null) {
+                const rect = canvas.getBoundingClientRect();
+                mouseX = e.clientX - rect.left;
+                mouseY = e.clientY - rect.top;
+
+                let { P, V } = toPhysicalCoords(mouseX, mouseY);
+
+                // Clamp P and V to reasonable bounds
+                P = Math.max(100, P); // Min pressure 100 Pa
+                V = Math.max(0.01, V); // Min volume 0.01 m^3
+
+                // Update the correct point based on dragging type
+                if (draggingType === 'vertex') {
+                    vertices[draggingPointIndex].P = P; // Corrected: use P and V directly
+                    vertices[draggingPointIndex].V = V; // Corrected: use P and V directly
+                } else if (draggingType === 'control') {
+                    controlPoints[draggingPointIndex].P = P; // Corrected: use P and V directly
+                    controlPoints[draggingPointIndex].V = V; // Corrected: use P and V directly
+                }
+                drawCycle(); // Redraw with updated point
+            }
+        });
+
+        // Mouse up event: Stop dragging
+        canvas.addEventListener('mouseup', () => {
+            draggingPointIndex = -1;
+            draggingType = null;
+            canvas.classList.remove('active');
+        });
+
+        // Mouse leave event: Stop dragging if mouse leaves canvas area
+        canvas.addEventListener('mouseleave', () => {
+            draggingPointIndex = -1;
+            draggingType = null;
+            canvas.classList.remove('active');
+        });
+
+        // Handle canvas resizing to make it responsive
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            drawCycle(); // Redraw content to fit new size
+        }
+
+        // Reset button functionality: Restore default cycle points
+        resetButton.addEventListener('click', () => {
+            // Deep copy default points to avoid modifying the original array
+            vertices = JSON.parse(JSON.stringify(defaultVertices));
+            controlPoints = JSON.parse(JSON.stringify(defaultControlPoints));
+
+            // Adjust P_MAX_VIEW and V_MAX_VIEW based on default points to ensure they fit well
+            let allDefaultPoints = [...defaultVertices, ...defaultControlPoints];
+            P_MAX_VIEW = Math.max(...allDefaultPoints.map(p => p.P)) * 1.5; // 50% buffer
+            V_MAX_VIEW = Math.max(...allDefaultPoints.map(p => p.V)) * 1.5; // 50% buffer
+            drawCycle();
+        });
+
+        // Initial setup when the window loads
+        window.onload = () => {
+            resizeCanvas(); // Set initial canvas size and draw
+            window.addEventListener('resize', resizeCanvas); // Add event listener for window resize
+            resetButton.click(); // Initialize the cycle with default points
+        };
+
+    </script>
+</body>
+</html>
