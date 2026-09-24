@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Heat and Work Simulation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background-color: #f0f4f8; /* Light blue-gray background */
+            color: #2d3748; /* Darker text */
+        }
+        canvas {
+            background-color: #ffffff; /* White canvas background */
+            border-radius: 0.75rem; /* Rounded corners for canvas */
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); /* Subtle shadow */
+            display: block;
+            margin: 0 auto;
+            max-width: 100%; /* Ensure responsiveness */
+            height: auto;
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 8px;
+            background: #cbd5e0; /* Light gray track */
+            outline: none;
+            opacity: 0.7;
+            -webkit-transition: .2s;
+            transition: opacity .2s;
+            border-radius: 9999px; /* Pill-shaped track */
+        }
+        input[type="range"]:hover {
+            opacity: 1;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #4299e1; /* Blue thumb */
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #4299e1; /* Blue thumb */
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        .info-box {
+            background-color: #e2e8f0; /* Lighter gray for info boxes */
+            padding: 0.75rem 1.25rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            color: #2d3748;
+            box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+        }
+        .control-label {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #4a5568; /* Slightly darker gray for labels */
+        }
+    </style>
+</head>
+<body class="p-6 md:p-10 flex flex-col items-center justify-center min-h-screen">
+    <div class="max-w-4xl w-full bg-white rounded-xl shadow-lg p-6 md:p-8 space-y-6">
+        <h1 class="text-3xl md:text-4xl font-bold text-center text-blue-700 mb-6">Heat & Work: Energy Level Simulation ⚛️</h1>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+            <!-- Controls Column -->
+            <div class="md:col-span-1 space-y-6">
+                <div class="p-4 bg-blue-50 rounded-lg shadow-inner">
+                    <label for="workSlider" class="block control-label mb-2">Work (Energy Level Configuration):</label>
+                    <input type="range" id="workSlider" min="0" max="200" value="100" class="w-full">
+                    <p class="text-sm text-gray-600 mt-2">Adjusting this slider simulates work done on the system. It changes both the base energy and the separation between energy levels.</p>
+                </div>
+
+                <div class="p-4 bg-red-50 rounded-lg shadow-inner">
+                    <label for="tempSlider" class="block control-label mb-2">Heat (Temperature):</label>
+                    <input type="range" id="tempSlider" min="1" max="200" value="100" class="w-full">
+                    <p class="text-sm text-gray-600 mt-2">Adjusting this slider simulates adding/removing heat, changing the system's temperature and particle distribution.</p>
+                </div>
+
+                <div class="info-box text-center">
+                    Total Particles: <span id="particleCountDisplay" class="font-bold text-blue-700"></span>
+                </div>
+            </div>
+
+            <!-- Canvas Column -->
+            <div class="md:col-span-2 flex justify-center items-center">
+                <canvas id="energyCanvas" width="800" height="500" class="w-full h-auto"></canvas>
+            </div>
+        </div>
+
+        <!-- Total Energy Display -->
+        <div class="info-box text-center mt-6">
+            Total System Energy: <span id="totalEnergyDisplay" class="font-bold text-green-700 text-xl">0.00</span> units
+        </div>
+
+    </div>
+
+    <script>
+        // Canvas and Context
+        const canvas = document.getElementById('energyCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Sliders
+        const workSlider = document.getElementById('workSlider');
+        const tempSlider = document.getElementById('tempSlider');
+        const totalEnergyDisplay = document.getElementById('totalEnergyDisplay');
+        const particleCountDisplay = document.getElementById('particleCountDisplay');
+
+        // Simulation Constants (Adjust these for different behaviors)
+        const NUM_PARTICLES = 100; // Fixed population of particles
+        const NUM_LEVELS = 8;     // Number of discrete energy levels
+        const K_BOLTZMANN = 0.1;  // Boltzmann constant (simplified for simulation, acts as a scaling factor for T)
+        const PARTICLE_RADIUS = 5; // Radius of drawn particles
+        const LEVEL_HEIGHT = 5;    // Thickness of energy level lines
+        const PARTICLE_SPACING = PARTICLE_RADIUS * 2 + 2; // Spacing between particles on a level
+        const PARTICLE_COLOR = '#8b5cf6'; // Purple
+        const LEVEL_COLOR = '#4a5568'; // Dark gray
+        const LEVEL_TEXT_COLOR = '#2d3748'; // Even darker text
+
+        // Fixed global energy range for canvas mapping
+        const FIXED_MIN_GLOBAL_ENERGY = 0;
+        // Max possible energy (base_max + (num_levels-1)*separation_max)
+        // With new slider range: max_base_energy = (200/200)*40 = 40
+        // max_level_separation = 5 + (200/200)*30 = 35
+        // max top level energy = 40 + (8-1)*35 = 40 + 7*35 = 40 + 245 = 285.
+        // Set a bit higher to ensure all levels are visible.
+        const FIXED_MAX_GLOBAL_ENERGY = 350;
+
+        // Simulation Variables
+        let baseEnergy = 0;       // Base energy of the lowest level
+        let levelSeparation = 10; // Energy difference between adjacent levels
+        let temperature = 1;      // System temperature
+
+        // Array to store current energy levels
+        let energyLevels = []; // [E0, E1, E2, ...]
+
+        // Function to update energy levels based on slider value
+        function updateEnergyLevels(sliderValue) {
+            // Ensure baseEnergy is always zero or positive
+            // Ranges from 0 to 40 (was 0 to 20 with max=100)
+            baseEnergy = (sliderValue / 200) * 40;
+
+            // levelSeparation ranges from 5 to 35 (was 5 to 20 with max=100)
+            levelSeparation = 5 + (sliderValue / 200) * 30;
+
+            energyLevels = [];
+            for (let i = 0; i < NUM_LEVELS; i++) {
+                energyLevels.push(baseEnergy + i * levelSeparation);
+            }
+        }
+
+        // Function to calculate particle populations using Boltzmann distribution
+        function calculateBoltzmannPopulations() {
+            if (temperature <= 0) { // Avoid division by zero or negative temperatures
+                // If T is zero or negative, all particles fall to the lowest energy level
+                const populations = new Array(NUM_LEVELS).fill(0);
+                populations[0] = NUM_PARTICLES;
+                return populations;
+            }
+
+            // Calculate Boltzmann factors for each level
+            const boltzmannFactors = energyLevels.map(E => Math.exp(-E / (K_BOLTZMANN * temperature)));
+
+            // Calculate the partition function (sum of Boltzmann factors)
+            const partitionFunction = boltzmannFactors.reduce((sum, factor) => sum + factor, 0);
+
+            // Calculate the population for each level
+            const populations = boltzmannFactors.map(factor =>
+                Math.round(NUM_PARTICLES * (factor / partitionFunction))
+            );
+
+            // Due to rounding, the sum might not be exactly NUM_PARTICLES.
+            // Adjust the lowest level to ensure the total is correct.
+            const currentTotalParticles = populations.reduce((sum, count) => sum + count, 0);
+            if (currentTotalParticles !== NUM_PARTICLES) {
+                // Find the index of the lowest energy level
+                const minLevelIndex = energyLevels.findIndex((val, i, arr) => val === Math.min(...arr));
+                populations[minLevelIndex] += (NUM_PARTICLES - currentTotalParticles);
+                // Ensure no negative populations
+                if (populations[minLevelIndex] < 0) populations[minLevelIndex] = 0;
+            }
+
+            return populations;
+        }
+
+        // Function to calculate the total energy of the system
+        function calculateTotalSystemEnergy(populations) {
+            let totalEnergy = 0;
+            for (let i = 0; i < NUM_LEVELS; i++) {
+                totalEnergy += populations[i] * energyLevels[i];
+            }
+            return totalEnergy;
+        }
+
+        // Drawing function
+        function draw() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Recalculate populations
+            const populations = calculateBoltzmannPopulations();
+
+            // Calculate total energy
+            const currentTotalEnergy = calculateTotalSystemEnergy(populations);
+            totalEnergyDisplay.textContent = currentTotalEnergy.toFixed(2);
+
+            // Draw energy levels and particles
+            const levelYPositions = []; // Store Y positions for drawing
+
+            // Define canvas drawing area margins
+            const topMargin = 50;
+            const bottomMargin = 50;
+            const availableHeight = canvas.height - topMargin - bottomMargin;
+            const globalEnergyRange = FIXED_MAX_GLOBAL_ENERGY - FIXED_MIN_GLOBAL_ENERGY;
+
+
+            for (let i = 0; i < NUM_LEVELS; i++) {
+                const levelEnergy = energyLevels[i];
+
+                // Map energy to canvas Y coordinate using the fixed global energy range
+                // Higher energy values will result in lower Y coordinates (moving up on canvas)
+                let y = topMargin + availableHeight * (1 - (levelEnergy - FIXED_MIN_GLOBAL_ENERGY) / globalEnergyRange);
+                levelYPositions.push(y);
+
+                // Draw energy level line
+                ctx.fillStyle = LEVEL_COLOR;
+                ctx.fillRect(50, y - LEVEL_HEIGHT / 2, canvas.width - 100, LEVEL_HEIGHT);
+
+                // Draw energy value text
+                ctx.fillStyle = LEVEL_TEXT_COLOR;
+                ctx.font = '14px Inter';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(`E${i}: ${levelEnergy.toFixed(2)}`, 10, y);
+
+                // Draw particles on this level
+                const particlesOnThisLevel = populations[i];
+                let startX = canvas.width / 2 - (particlesOnThisLevel * PARTICLE_SPACING) / 2 + PARTICLE_RADIUS;
+                for (let p = 0; p < particlesOnThisLevel; p++) {
+                    ctx.beginPath();
+                    ctx.arc(startX + p * PARTICLE_SPACING, y, PARTICLE_RADIUS, 0, Math.PI * 2);
+                    ctx.fillStyle = PARTICLE_COLOR;
+                    ctx.fill();
+                    ctx.closePath();
+                }
+            }
+        }
+
+        // Event Listeners
+        workSlider.addEventListener('input', () => {
+            updateEnergyLevels(parseInt(workSlider.value));
+            draw();
+        });
+
+        tempSlider.addEventListener('input', () => {
+            temperature = parseInt(tempSlider.value);
+            draw();
+        });
+
+        // Initial setup and draw
+        window.onload = function() {
+            // Display total particle count
+            particleCountDisplay.textContent = NUM_PARTICLES;
+
+            // Initial update and draw
+            updateEnergyLevels(parseInt(workSlider.value));
+            temperature = parseInt(tempSlider.value);
+            draw();
+
+            // Handle window resize to adjust canvas
+            const resizeCanvas = () => {
+                const parentWidth = canvas.parentElement.clientWidth;
+                canvas.width = Math.min(800, parentWidth); // Max 800px width, responsive to parent
+                canvas.height = 500; // Fixed height for simplicity, could be dynamic
+                draw();
+            };
+
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas(); // Call once on load
+        }
+    </script>
+</body>
+</html>
